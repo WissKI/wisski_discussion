@@ -1,0 +1,227 @@
+<?php
+
+function wisski_discussion_menu() {
+	$items = array();
+	$items['discussions'] = array(
+		'title' => 'WissKI discussions overview',
+		'description' => 'This is the discussion overview.',
+		'page callback' => 'wisski_discussion_main',
+		'access arguments' => array('wisski access view'),
+		'type' => MENU_CALLBACK,
+	);
+
+	$items['discussions/%node'] = array(
+		'title' => 'WissKI discussion',
+		'description' => 'This is the discussion on node ' . array(1) . '.',
+		'page callback' => 'wisski_discussion_disc',
+		'page arguments' => array(1),
+		'access arguments' => array('wisski access view'),
+		'type' => MENU_CALLBACK,
+	);
+
+		$items['discussion/exchange/%node'] = array(
+		'title' => 'WissKI discussion',
+		'description' => 'This is the discussion on node ' . array(1) . '.',
+		'page callback' => 'wisski_discussion_exchange',
+		'page arguments' => array(2, 3),
+		'access arguments' => array('wisski administrate page'),
+		'type' => MENU_CALLBACK,
+	);
+
+
+	return $items;
+}
+
+function wisski_discussion_exchange($nodenr, $cid) {
+	if(isset($cid)) {
+		$comment = _comment_load($cid);	
+		$node = node_load($nodenr->nid);
+		
+		$body = $node->body;
+		$changed = $node->changed;
+		$created = $node->created;
+		$teaser = $node->teaser;
+		$name = $node->name;
+		
+		$node->body = $comment->comment;
+		$node->created = $comment->timestamp;
+		$node->changed = time();
+		$node->name = $comment->name;
+		$node->revision = 1;
+
+		wisski_store_getObj()->wisski_Store_delSubNodes($node);
+
+		node_save($node);
+
+		$tr = wisski_str2triples($node->body);
+
+		$tr = wisski_convertTriplesFromRDFA($tr);
+
+		$mainsubj = $tr[0]['s'];		
+
+		for($i = 0; $i< count($tr); $i++) {
+			foreach($tr[$i] as &$triplepart) {
+				if($triplepart == $mainsubj) {
+					$triplepart = str_replace($mainsubj, wisski_store_getObj()->wisski_ARCAdapter_delNamespace($node->title), $triplepart);
+				}
+			}
+		}
+
+	  if(isset($tr)) {
+  		wisski_store_getObj()->wisski_ARCAdapter_getStore()->insert($tr, wisski_store_getObj()->wisski_ARCAdapter_graphName(), FALSE);
+    	foreach($tr as $triple) {
+      	if($triple['s'] != wisski_store_getObj()->wisski_ARCAdapter_delNamespace($node->title))
+					wisski_store_addNodeForTriple($triple);
+    	}
+  	}
+
+
+	}
+	
+
+	drupal_goto('node/' .$node->nid);
+}
+
+function wisski_discussion_main() {
+	$out = "";
+	$out .= t("Recent discussions:");
+	$outList = array();
+	$tmpOutList = array();
+	foreach (comment_get_recent(1000) as $comment) {
+		$tmpOutList[$comment->nid][] = array(l($comment->subject, 'node/'. $comment->nid, array('fragment' => 'comment-'. $comment->cid)), t('@time ago', array('@time' => format_interval(time() - $comment->timestamp))));
+	}
+
+	
+	foreach($tmpOutList as $key => $value) {
+		$node = node_load($key);
+		$outList[] = l($node->title, "node/" . $node->nid) . '<br />' . theme('table', NULL, $value);
+	}
+
+	return $out . theme('item_list', $outList);
+}
+
+function wisski_discussion_disc($arg) {
+	return "<br>" . comment_render($arg);
+}
+
+function wisski_discussion_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL) {
+	switch($op) {
+		case 'alter':
+			if(isset($node->links['comment_add']))
+				unset($node->links['comment_add']); // ['title'] = 'Add discussion entry';
+			if(isset($node->links['comment_comments'])) {
+				$node->links['comment_comments']['title'] = str_replace('comment', 'discussion posting', $node->links['comment_comments']['title']);
+				$node->links['comment_comments']['attributes']['title'] = str_replace('comment', 'discussion', $node->links['comment_comments']['attributes']['title']);
+			}
+
+			if(isset($node->links['comment_new_comments'])) {
+				$node->links['comment_new_comments']['title'] = str_replace('comment', 'discussion posting', $node->links['comment_new_comments']['title']);
+				$node->links['comment_new_comments']['attributes']['title'] = str_replace('comment', 'discussion', $node->links['comment_new_comments']['attributes']['title']);
+			}
+				
+			break;
+	}
+}
+
+function wisski_discussion_link($type, $object, $teaser = FALSE) {
+/*
+	if($type == "comment") {
+		$links = array();
+		$links['bla'] = array(
+			'title' => t('exchange with main topic'),
+			'href' => 'discussion/exchange/' . $object->nid . '/' . $object->cid,
+			'attributes' => array('title' => t('Exchange this post with the text of the main post.'), 'html' => TRUE),
+		);
+		return $links;	
+	}
+	*/
+}
+
+function wisski_discussion_comment(&$a1, $op) {
+	if($op == "view") {
+		if( module_exists('rdfaify') ) {
+		$str = $a1->comment;
+
+		$str = _rdfaify_annotate_string($str);
+
+		$str = _rdfaify_beautify($str);
+
+		$a1->comment = $str;
+		}
+	}
+	if($op == "insert") {
+		$node = node_load($a1['nid']);
+
+		$query = db_query("SELECT comment_count FROM {node_comment_statistics} WHERE nid = %d ", $node->nid);
+		$data = db_fetch_object($query);
+
+		if($data->comment_count == 0) {
+		    $mai = TRUE;
+		  if($mai == FALSE) {
+			$commentStore = $a1;
+
+			$a1['comment'] = $node->body;
+			unset($a1['subject']);
+			$a1['timestamp'] = $node->created;
+    	$a1['author'] = $node->name;
+			$a1['nid'] = $node->nid;
+
+			$comment = array();
+			$comment['comment'] = $commentStore['comment'];
+			$comment['author'] = $commentStore['author'];
+			$comment['nid'] = $commentStore['nid'];
+
+			_comment_form_submit($a1);
+			_comment_form_submit($comment);
+
+			$count = $node->comment_count + 1;
+			db_query("UPDATE {node_comment_statistics} SET comment_count = %d WHERE nid = %d", $count, $node->nid); 
+			comment_save($a1);
+			comment_save($comment);
+
+			_comment_update_node_statistics($node->nid);
+
+			}
+		}
+	}
+}
+
+/**
+* Implementation of hook_block
+* @param string $op one of "list", "view", "save" and "configure"
+* @param integer $delta code to identify the block
+* @param array $edit only for "save" operation
+**/
+function wisski_discussion_block($op = 'list', $delta = 0, $edit = array()) { 
+if ($op == "list") {
+    // Generate listing of blocks from this module, for the admin/block page
+    $block = array();
+    $block[0]["info"] = t('WissKI discussion Block');
+    return $block;
+  } else if ($op == 'view') {
+		// get the node
+		if (is_numeric(arg(1)))
+	  	$node = node_load(arg(1));
+		
+		// If no node could be retrieved
+		if(!isset($node))
+			return;
+
+		// if the node is not an individual node
+		if($node->type != "individual")
+			return;
+
+		$list = array();
+		if(arg(0) == 'node')
+			$list[] = array(l(t("Show discussion for this topic"), "discussions/" . $node->nid));
+		else
+		  $list[] = array(l(t("Back to the object"), "node/" . $node->nid));
+
+		$list[] = array(l(t("New discussion entry"), "comment/reply/" . $node->nid, array('fragment' => 'comment-form')));
+		$list[] = array(l(t("Recent discussions"), "discussions"));
+		$block['content'] = theme('item_list',$list, t(""));
+		$block['subject'] = 'Diskussion';
+    return $block;
+   
+  }
+} // function relations_block

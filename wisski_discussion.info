@@ -1,0 +1,8 @@
+; $Id$
+name = WissKI Discussion Module
+description = An addon for the WissKI-Module that shows in a Block which discussions are in progress
+core = 6.x
+version = 1.0
+dependencies[] = wisski
+dependencies[] = comment
+package = "WissKI"
